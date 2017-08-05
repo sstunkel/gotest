@@ -2,13 +2,13 @@ package main
 
 import (
 	"fmt"
+	"io"
 
+	simplejson "github.com/bitly/go-simplejson"
 	"github.com/gin-gonic/gin"
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
 )
-
-var DB = make(map[string]string)
 
 type Job struct {
 	// ApplicationID string
@@ -44,12 +44,33 @@ func main() {
 		id := bson.ObjectIdHex(c.Param("id"))
 		var result bson.M
 		err := jobCollection.Find(bson.M{"_id": id}).One(&result)
+		err, convertedJson := convertBsonToSimpleJSON(result)
 		chkFatal(err)
-		fmt.Println(result)
-		var job Job = Job(result)
-		fmt.Println(job)
-		c.JSON(200, result)
+		c.JSON(200, convertedJson)
 		// c.String(200, result)
+	})
+
+	r.GET("/job/:id/export", func(c *gin.Context) {
+		id := bson.ObjectIdHex(c.Param("id"))
+		var result bson.M
+		err := jobCollection.Find(bson.M{"_id": id}).One(&result)
+		err, convertedJson := convertBsonToSimpleJSON(result)
+		chkFatal(err)
+		bucket := convertedJson.GetPath("definition", "bucket").MustString("")
+		storageKey := convertedJson.GetPath("definition", "storageKey").MustString("")
+		if bucket == "" || storageKey == "" {
+			return
+		}
+		keys := GetAllGZFiles(bucket, storageKey+"/output")
+		// c.String(200, "ok")
+		c.Stream(func(w io.Writer) bool {
+			for _, element := range keys {
+				//fmt.Println("adding " + element)
+				err := GetDownloadStream(bucket, element, w)
+				chkFatal(err)
+			}
+			return false
+		})
 	})
 
 	// // Get user value
@@ -91,6 +112,16 @@ func main() {
 
 	// Listen and Server in 0.0.0.0:8080
 	r.Run(":8080")
+}
+
+func convertBsonToSimpleJSON(input bson.M) (err error, result *simplejson.Json) {
+	bytes, err := bson.MarshalJSON(input)
+	if err != nil {
+		return err, simplejson.New()
+	}
+	ret, err := simplejson.NewJson(bytes)
+	chkFatal(err)
+	return nil, ret
 }
 
 func chkFatal(err error) {

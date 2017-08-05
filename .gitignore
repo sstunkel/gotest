@@ -1,1 +1,6 @@
 vendor
+/.idea/
+.idea/gotest.iml
+.idea/libraries/GOPATH__gotest_.xml
+.idea/modules.xml
+.idea/workspace.xml
