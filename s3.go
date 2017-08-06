@@ -3,7 +3,9 @@ package main
 import (
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"strings"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -31,23 +33,44 @@ func initializes3Service() {
 	s3Svc = s3.New(sess)
 }
 
-func GetDownloadStream(bucket string, key string, writer io.Writer) (err error) {
+func GetDownloadStream(bucket string, keys []string, writer io.Writer) (err error) {
 	if s3Svc == nil {
 		initializes3Service()
 	}
-
-	result, err := s3Svc.GetObject(&s3.GetObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-	})
-
-	if err != nil {
-		return err
+	chkFatal(err)
+	for _, key := range keys {
+		fmt.Println("adding " + key)
+		result, err := s3Svc.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(key),
+		})
+		chkFatal(err)
+		unzippedFile, err := gzip.NewReader(result.Body)
+		chkFatal(err)
+		io.Copy(writer, unzippedFile)
+		result.Body.Close()
 	}
-	unzippedFile, _ := gzip.NewReader(result.Body)
-	io.Copy(writer, unzippedFile)
-	result.Body.Close()
 	return
+}
+
+func GetSingleFileInFolder(bucket string, keyPrefix string, suffix string) (file string) {
+	if s3Svc == nil {
+		initializes3Service()
+	}
+	keys := GetAllFilesWithSuffix(bucket, keyPrefix, suffix)
+	if len(keys) == 1 {
+		result, err := s3Svc.GetObject(&s3.GetObjectInput{
+			Bucket: aws.String(bucket),
+			Key:    aws.String(keys[0]),
+		})
+		chkFatal(err)
+		file, err := ioutil.ReadAll(result.Body)
+		chkFatal(err)
+		return string(file)
+	} else {
+		fmt.Println("didn't get one key")
+		return
+	}
 }
 
 func SplitIntoBucketAndKey(fullPath string) (err error, bucket string, key string) {
@@ -59,10 +82,11 @@ func SplitIntoBucketAndKey(fullPath string) (err error, bucket string, key strin
 	return nil, pathSlice[2], strings.Join(pathSlice[3:pathLength], "/")
 }
 
-func GetAllGZFiles(bucket string, keyPrefix string) (keys []string) {
+func GetAllFilesWithSuffix(bucket string, keyPrefix string, suffix string) (keys []string) {
 	if s3Svc == nil {
 		initializes3Service()
 	}
+	fmt.Println("finding all keys for bucket: " + bucket + " , keyPrefix: " + keyPrefix + " ,suffix: " + suffix)
 	params := &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(keyPrefix),
@@ -78,7 +102,7 @@ func GetAllGZFiles(bucket string, keyPrefix string) (keys []string) {
 	err := s3Svc.ListObjectsV2Pages(params,
 		func(page *s3.ListObjectsV2Output, lastPage bool) bool {
 			for _, element := range page.Contents {
-				if strings.HasSuffix(*element.Key, ".csv.gz") {
+				if strings.HasSuffix(*element.Key, suffix) && *element.Size > int64(0) {
 					keys = append(keys, *element.Key)
 				}
 			}

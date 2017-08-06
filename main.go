@@ -1,13 +1,16 @@
 package main
 
 import (
+	"archive/zip"
 	"fmt"
 	"io"
+	"os"
 
 	simplejson "github.com/bitly/go-simplejson"
 	"github.com/gin-gonic/gin"
 	mgo "gopkg.in/mgo.v2"
 	"gopkg.in/mgo.v2/bson"
+	"encoding/csv"
 )
 
 type Job struct {
@@ -61,16 +64,43 @@ func main() {
 		if bucket == "" || storageKey == "" {
 			return
 		}
-		keys := GetAllGZFiles(bucket, storageKey+"/output")
-		// c.String(200, "ok")
-		c.Stream(func(w io.Writer) bool {
-			for _, element := range keys {
-				//fmt.Println("adding " + element)
-				err := GetDownloadStream(bucket, element, w)
+		exportReportString := GetSingleFileInFolder(bucket, storageKey+"/output/ExportReport", "json")
+		exportReportJson, err := simplejson.NewJson([]byte(exportReportString))
+		fmt.Println(exportReportString)
+		chkFatal(err)
+		c.Stream(func(responseWriter io.Writer) bool {
+			outputTables := exportReportJson.Get("outputTables").MustArray()
+			w := zip.NewWriter(responseWriter)
+			for _, table := range outputTables {
+				tableJSON := convertMapStringInterfaceBackToSimpleJson(table.(map[string]interface{}))
+				tableName := tableJSON.Get("tableName").MustString()
+				tableHeader := tableJSON.Get("columns").MustStringArray()
+				fmt.Println("processing " + tableName)
+				f, err := w.Create(tableName + ".csv")
+				headerWriter := csv.NewWriter(f)
+				headerWriter.Write(tableHeader)
+				headerWriter.Flush()
+				chkFatal(err)
+				keys := GetAllFilesWithSuffix(bucket, storageKey+"/output/"+tableName+"/", ".csv.gz")
+				err = GetDownloadStream(bucket, keys, f)
 				chkFatal(err)
 			}
+			w.Close()
 			return false
 		})
+		// keys := GetAllFilesWithSuffix(bucket, storageKey+"/output/Sample", ".csv.gz")
+		// c.String(200, "ok")
+		// c.Header("Content-Disposition", "attachment; filename=Sample.csv")
+		// c.Stream(func(w io.Writer) bool {
+		// 	err := GetDownloadStream(bucket, keys, w)
+		// 	chkFatal(err)
+		// 	// for _, element := range keys {
+		// 	// 	//fmt.Println("adding " + element)
+		// 	// 	err := GetDownloadStream(bucket, keys, w)
+		// 	// 	chkFatal(err)
+		// 	// }
+		// 	return false
+		// })
 	})
 
 	// // Get user value
@@ -122,6 +152,14 @@ func convertBsonToSimpleJSON(input bson.M) (err error, result *simplejson.Json) 
 	ret, err := simplejson.NewJson(bytes)
 	chkFatal(err)
 	return nil, ret
+}
+
+func convertMapStringInterfaceBackToSimpleJson(input map[string]interface{}) (output *simplejson.Json) {
+	output = simplejson.New()
+	for k, v := range input {
+		output.Set(k, v)
+	}
+	return
 }
 
 func chkFatal(err error) {
